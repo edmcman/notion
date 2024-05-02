@@ -281,7 +281,8 @@ void ioncore_restart_other(const char *cmd)
 EXTL_EXPORT
 void ioncore_snapshot()
 {
-    if(smhook!=NULL)
+    bool sm_can_snapshot = false;
+    if(smhook!=NULL && sm_can_snapshot)
         smhook(IONCORE_SM_SNAPSHOT);
     else
         ioncore_do_snapshot(TRUE);
