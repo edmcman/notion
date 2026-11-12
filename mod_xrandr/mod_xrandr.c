@@ -192,8 +192,52 @@ bool mod_xrandr_deinit()
     return TRUE;
 }
 
-void add_output(ExtlTab result, XRROutputInfo *output_info, XRRCrtcInfo *crtc_info)
+/* Output names (e.g. DisplayLink's DVI-I-2-1) can move between physical
+ * monitors on replug, so identify outputs by EDID serial when available. */
+static char *edid_serial(RROutput output)
 {
+    Atom edid_atom = XInternAtom(ioncore_g.dpy, RR_PROPERTY_RANDR_EDID, True);
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems, bytes_after;
+    unsigned char *edid = NULL;
+    char *serial = NULL;
+    int i;
+
+    if(edid_atom == None
+       || XRRGetOutputProperty(ioncore_g.dpy, output, edid_atom, 0, 128,
+                               False, False, AnyPropertyType, &actual_type,
+                               &actual_format, &nitems, &bytes_after,
+                               &edid) != Success
+       || edid == NULL)
+        return NULL;
+
+    for(i = 54; nitems >= 128 && i <= 108 && serial == NULL; i += 18){
+        const unsigned char *d = edid + i;
+        if(d[0] == 0 && d[1] == 0 && d[2] == 0 && d[3] == 0xff){
+            int len = 13;
+            while(len > 0 && (d[4+len] == '\n' || d[4+len] == ' '
+                              || d[4+len] == '\0'))
+                len--;
+            if(len > 0)
+                serial = scopyn((const char *)d + 5, len);
+        }
+    }
+
+    XFree(edid);
+    return serial;
+}
+
+static char *output_id(XRROutputInfo *output_info, RROutput output)
+{
+    char *serial = edid_serial(output);
+    return serial ? serial : scopy(output_info->name);
+}
+
+void add_output(ExtlTab result, XRROutputInfo *output_info, RROutput output,
+                XRRCrtcInfo *crtc_info)
+{
+    char *id = output_id(output_info, output);
     ExtlTab details = extl_create_table();
     /* TODO we probably have to strdup the outputs' data here, because we free
      * the XRROutputInfo later on. However, where can we make sure the strings
@@ -205,7 +249,10 @@ void add_output(ExtlTab result, XRROutputInfo *output_info, XRRCrtcInfo *crtc_in
     extl_table_sets_i(details, "y", crtc_info->y);
     extl_table_sets_i(details, "w", (int)crtc_info->width);
     extl_table_sets_i(details, "h", (int)crtc_info->height);
-    extl_table_sets_t(result, strdup(output_info->name), details);
+    extl_table_sets_s(details, "id", id);
+    extl_table_sets_t(result, id, details);
+    extl_unref_table(details);
+    free(id);
 }
 
 EXTL_SAFE
@@ -221,7 +268,7 @@ ExtlTab mod_xrandr_get_all_outputs()
         if(output_info->crtc != None){
             XRRCrtcInfo *crtc_info = XRRGetCrtcInfo(ioncore_g.dpy, res, output_info->crtc);
 
-            add_output(result, output_info, crtc_info);
+            add_output(result, output_info, res->outputs[i], crtc_info);
 
             XRRFreeCrtcInfo(crtc_info);
         }
@@ -262,7 +309,7 @@ ExtlTab mod_xrandr_get_outputs_for_geom(ExtlTab geom)
             extl_table_gets_i(geom, "h", &h);
             if(x==crtc_info->x && y==crtc_info->y
                && w==(int)crtc_info->width && h==(int)crtc_info->height){
-                add_output(result, output_info, crtc_info);
+                add_output(result, output_info, res->outputs[i], crtc_info);
             }
 
             XRRFreeCrtcInfo(crtc_info);
